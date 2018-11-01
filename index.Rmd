@@ -1,0 +1,462 @@
+---
+title: "Universe of League of Legends Network Analysis"
+author: "Camilo Vega Ramírez"
+date: "1 November 2018"
+output:
+  html_document:
+    df_print: paged
+    code_folding: hide
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    theme: cerulean
+    includes:
+      in_header: "favicon.txt"
+---
+<style>
+body {
+text-align: justify;
+}
+body .main-container {
+max-width: 3600px;
+}
+</style>
+
+---------------------------------
+# 0 Introduction.
+
+[League of Legends](http://www.leagueoflegends.com) (LoL) is one of the most popular free to play MOBA (Multiplayer Online Battle Arena) games, it was published by [Riot Games](https://www.riotgames.com/en) in 2009, and had in 2016 (according to [www.statista.com](https://www.statista.com/statistics/317099/number-lol-registered-users-worldwide/)) about 10 million active players, it is usually in the top ranks of viewers in platforms like [Twitch.tv](https://www.twitch.tv/directory/game/League%20of%20Legends) and [gaming.youtube.com](https://gaming.youtube.com/game/UCsZ9w8wgYJc4eea6oI-3HLQ).
+
+The game is composed by two teams, of five players each, who battle each other to destroy the opposing team´s base. Every player controls a champion which is selected from a pool of 141 champions. These champions have unique abilities, stats, and playstyles which group them in classes and subclasses.
+
+
+Riot also created the [Universe of League of Legends](https://universe.leagueoflegends.com/en_US/), that contains the history, images, songs, videos, etc. of the planet RuneTerra (where the game takes place), and of the champions and character that live and interact with it. 
+
+Through this document, we'll make a brief analysis of the "Social" Network of the RuneTerra's Champions. For this, we will create a Network based on the relations between the Champions. 
+
+To determine if two champions are connected we'll take for reference the [LoL Universe web page](https://universe.leagueoflegends.com/en_US/), in which each champion have a list of their "officially" related champions. Also, we'll use the relations between Champions showed in each of  Champion's  Wikia [background web pages](http://leagueoflegends.wikia.com/wiki/Category:Champion_backgrounds) since the Wikia take in consideration connections from the  Universe comics, short histories, etc. that for an unknown reason, are not yet listed in the Universe web page. For example, in the comic ["Ziggs & Jinx: Paint the Town"](https://universe.leagueoflegends.com/en_US/comic/jinx-ziggs/paint-the-town) we can see a relation for this two Champions, this relation it is listed on the Wikia page but not on the Universe page.
+
+
+## 0.1. Notes Before Starting.
+
+- We'll only consider the main universe relations, so relations of alternate universes like Star Guardians or Odyssey will be not present.
+
+- This document was made on November 2018, and since Riot constantly remakes the Universe and champions background, it is possible for this network to only be valid for this date.
+
+- [R language](https://www.r-project.org/) will be used for the analysis, all the code will be hidden, but you can see it all by clicking the "code" button in the upper right corner of this document and selecting "Show All Code", you can also see individual chunks of code by clicking the several "code" buttons that will appear to the right of each of the outputs.
+
+- The plots will be interactive, so you can pass the mouse over a point and get information of it and also be able to zoom in, zoom out, and click and drag points to explore them.
+
+
+## 0.2. Loading Requiered Packages.
+
+This document uses the following R packages for the analysis: dplyr, httr, rvest, stringr, igraph, visNetwork, tidyr, kableExtra, formattable, and htmltools.
+
+```{r message=FALSE}
+require(dplyr)
+require(httr)
+require(rvest)
+require(stringr)
+require(igraph)
+require(visNetwork)
+require(tidyr)
+require(kableExtra)
+require(formattable)
+require(htmltools)
+```
+
+
+# 1. Universe of League of Legends Network.
+
+The following is the visual representation of the full Universe Network, each of the nodes is a Champion colored by region, and each of the connections represent the relation between two Champions, these are colored for champions of the same region according to the region's assigned color, and black for relations between Champions from different regions.
+
+On the left, you can select a Champion to highlight their connections, or select a region to highlight its Champions.
+
+```{r warning=FALSE}
+# Getting latest patch
+patch <-  GET("https://ddragon.leagueoflegends.com/api/versions.json") %>% 
+  content(encoding = "UTF-8") %>% `[[`(1)
+
+# Getting champions info
+jsonData <-  paste0("http://ddragon.leagueoflegends.com/cdn/",patch,"/data/en_US/championFull.json") %>% 
+  GET() %>%
+  content(encoding = "UTF-8")
+
+# Getting champions names and Changing Nunu & Willump, for Nunu
+champions <- sapply(names(jsonData$data), function(x) jsonData$data[[x]]$name) %>% 
+  str_replace("Nunu & Willump", "Nunu")
+
+# Getting the champions images
+image <- paste0("http://ddragon.leagueoflegends.com/cdn/", patch, "/img/champion/", names(jsonData$data),".png ")
+
+# Creating the nodes (champions) data frame                   
+championsDf <- data_frame(id = champions, label = champions, image)
+
+# Scraping the connections
+lolNetwork <- data_frame()
+for (i in seq_along(champions)) {
+  url <- paste0("http://leagueoflegends.wikia.com/wiki/", str_replace(champions[i]," ", "_") %>%
+                  str_replace("\\'", "%27"), "/Background")
+  related <- read_html(url) %>% 
+    html_nodes(xpath = '//*[@id="mw-content-text"]/aside/section/table') %>% 
+    html_table() %>% 
+    bind_cols() %>% 
+    t()
+  if (length(related) == 0) {
+    next
+  } 
+  related <- data_frame(from = champions[i], to = related[,1])
+  lolNetwork <- rbind(lolNetwork,related)
+}
+
+# Changing alter ego and companions names, for the name  the original champion
+lolNetwork <- lolNetwork %>% 
+  mutate(to = case_when(to == "Rhaast" ~ "Kayn",
+                        to == "Tibbers" ~ "Annie",
+                        to == "Willump" ~ "Nunu",
+                        to == "Skaarl" ~ "Kled",
+                        to == "Valor" ~ "Quinn",
+                        to == "Bristle" ~ "Sejuani",
+                        to == "Beatrice" ~ "Swain",
+                        to == "Valmar" ~ "Varus",
+                        to == "Kai" ~ "Varus",
+                        TRUE ~ lolNetwork$to))
+
+# Connections present in the Universe page but not in the Wikia page
+universeEdges <- data_frame(from = c("Ashe", "Ezreal", "Ezreal", "Heimerdinger", "Lulu", "Tahm Kench"),
+                            to = c("Nunu", "Kassadin", "Rek'Sai", "Gnar", "Gnar", "Pyke")) 
+
+# Creating the complete connections dataframe, and simplifying to remove self connections and repeated connections
+completeLolNetwork <- rbind(lolNetwork,universeEdges) %>% 
+  graph_from_data_frame(directed = F) %>% 
+  simplify() %>% 
+  as_data_frame(what = "edges")
+
+# Universe regions
+regions <- c("Bandle City", "Demacia", "Freljord", "Ionia", "Mount Targon", "Noxus", "Piltover", 
+                  "Bilgewater", "Shadow Isles", "Shurima", "The Void", "Zaun")
+
+# Scraping to get the champios for each region
+regionChamps <- data_frame()
+for (i in seq_along(regions)) {
+  url <- paste0("http://leagueoflegends.wikia.com/wiki/", str_replace(regions[i]," ", "_"))  
+  related <- read_html(url) %>% 
+    html_nodes(xpath = '//*[@id="mw-content-text"]/div/div/div[2]/a') %>% 
+    html_text() 
+  related <- related[related != ""]
+  related <- data_frame(id = related, region = regions[i])
+  regionChamps <- rbind(regionChamps,related)
+}
+
+# Changing Nunu & Willump to Nunu, and removing Soraka from Ionia (Officialy now Soraka is now from Targon)
+regionChamps <-  regionChamps %>% 
+  mutate(id = str_replace(id, "Nunu & Willump", "Nunu")) %>% 
+  filter(id != "Poro" , !(id == "Soraka" & region == "Ionia"))
+
+# Assigning RuneTerra as region for those champions without region
+runeterraChamps <- data_frame(id = setdiff(champions, regionChamps$id), region = "Runeterra")
+
+# Creting the complete Region/Champion dataframe
+allRegChamps <- rbind(regionChamps, runeterraChamps) %>% 
+  arrange(id)
+
+# Joining the region to the nodes dataframe, and assigning color per region, and other characteristics for the network plot
+championsDf <- left_join(championsDf, allRegChamps, by = "id") %>% 
+  mutate(shape = "circularImage",
+         color = case_when(region == "Bandle City" ~ "#e6194B",
+                           region == "Demacia" ~ "#3cb44b",
+                           region == "Freljord" ~ "#ffe119",
+                           region == "Ionia" ~ "#4363d8",
+                           region == "Mount Targon" ~ "#f58231",
+                           region == "Noxus" ~ "#911eb4",
+                           region == "Piltover" ~ "#800000",
+                           region == "Bilgewater" ~ "#808000",
+                           region == "Shadow Isles" ~ "#000075",
+                           region == "Shurima" ~ "#9A6324",
+                           region == "The Void" ~ "#f032e6",
+                           region == "Zaun" ~ "#42d4f4",
+                           region == "Runeterra" ~ "#bfef45"), 
+         borderWidth = 5) %>% 
+  mutate(title = paste0("Name: ", id, "<br>", "Region: ", region))
+
+
+# Joining the region to the connectios dataframe, and assigning color per region, and other characteristics for the network plot
+
+completeLolNetwork <- left_join(completeLolNetwork ,allRegChamps, by = c("from" = "id")) %>% 
+  left_join(allRegChamps, by = c("to" = "id")) %>% 
+  unite(fromRegion_toRegion, region.x, region.y) %>% 
+  mutate(color = case_when(fromRegion_toRegion == "Bandle City_Bandle City" ~ "#e6194B",
+                           fromRegion_toRegion == "Demacia_Demacia" ~ "#3cb44b",
+                           fromRegion_toRegion == "Freljord_Freljord" ~ "#ffe119",
+                           fromRegion_toRegion == "Ionia_Ionia" ~ "#4363d8",
+                           fromRegion_toRegion == "Mount Targon_Mount Targon" ~ "#f58231",
+                           fromRegion_toRegion == "Noxus_Noxus" ~ "#911eb4",
+                           fromRegion_toRegion == "Piltover_Piltover" ~ "#800000",
+                           fromRegion_toRegion == "Bilgewater_Bilgewater" ~ "#808000",
+                           fromRegion_toRegion == "Shadow Isles_Shadow Isles" ~ "#000075",
+                           fromRegion_toRegion == "Shurima_Shurima" ~ "#9A6324",
+                           fromRegion_toRegion == "The Void_The Void" ~ "#f032e6",
+                           fromRegion_toRegion == "Zaun_Zaun" ~ "#42d4f4",
+                           fromRegion_toRegion == "Runeterra_Runeterra" ~ "#bfef45",
+                           TRUE ~ "#000000"
+                           ), width = 3) 
+
+
+# Seed for reproducibility
+set.seed(26102018)
+
+# Network plot
+network <- visNetwork(championsDf, completeLolNetwork, height = "500px", width = "100%", 
+           main = "Universe of League of Legends Network") %>%
+  visNodes(shapeProperties = list(useBorderWithImage = TRUE)) %>%
+  visIgraphLayout(layout = "layout_nicely") %>% 
+  visOptions(highlightNearest = T, selectedBy = "region", nodesIdSelection = TRUE) %>% 
+  visInteraction(navigationButtons = TRUE)
+
+
+# Manually creating the labels for the network plot
+colors <- c("#e6194B","#3cb44b","#ffe119","#4363d8","#f58231","#911eb4","#800000", "#808000", "#000075", "#9A6324", "#f032e6",
+            "#42d4f4", "#bfef45", "#000000")
+
+labels <- data_frame(Region = c(regions, "Runeterra", "Edge Between Different Regions"), 
+                     Color = cell_spec("__", background = colors, color = colors, align = "center")
+                     ) %>% 
+  formattable() %>% 
+  as.htmlwidget()
+
+# Creating the final Network plot
+browsable(
+  tagList(list(
+    tags$div(
+      style = 'width:85%;display:block;float:left;margin-left: 1%',
+      network
+    ),
+    tags$div(
+      style = 'width:13%;display:block;float:left;',
+      labels
+    )
+  ))
+)
+```
+
+
+## 1.1. Connected Network.
+
+Not all Champions have friends (or enemies). ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Amumu.png "Amumu"){ width=25 }, ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Rammus.png "Rammus"){ width=25 }, ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Annie.png "Annie"){ width=25 }, ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Ivern.png "Ivern"){ width=25 }Ivern, and ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Bard.png "Bard"){ width=25 } have none relations with other champions in the network, also ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Zac.png "Zac"){ width=25 } and ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Twitch.png "Twitch"){ width=25 }  have a connection but it is disconnected from the other champions. So for further analysis, we'll remove those Champions, and we'll work with the following fully connected Network:
+
+```{r}
+
+# Creating a graph object and removing the nodes without connection to the main network
+LOLConected  <- graph_from_data_frame(completeLolNetwork, directed = F, vertices = championsDf) 
+
+LOLConected <- decompose(LOLConected)[[1]]
+
+# Seed for reproducibility
+set.seed(26102018)
+
+# Visualizing the fully connected Network
+visData <- toVisNetworkData(LOLConected)
+
+visNetwork(visData$nodes, visData$edges, height = "500px", width = "100%", 
+           main = "Universe of League of Legends Fully Connected Network") %>% 
+  visIgraphLayout(layout = "layout_nicely") %>% 
+  visOptions(highlightNearest = T, selectedBy = "region", nodesIdSelection = TRUE) %>% 
+  visInteraction(navigationButtons = TRUE)
+```
+
+# 2. Network Properties.
+
+The following table shows some  of the fully Connected Network basic properties:
+
+```{r fig.width =50}
+format(data.frame(Measure = c("Diameter", "Mean Distance", "Transitivity", "Assortativity by Degree"),
+                  Value = c(diameter(LOLConected),
+                     mean_distance(LOLConected),
+                     transitivity(LOLConected),
+                     assortativity_degree(LOLConected)
+                     ))
+       ,digits=2) %>% 
+  knitr::kable(align = "r") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+The **Diameter** of a network tell us the minimum number of connections needed to connect the farthest nodes in the network. For our Universe Network, the Diameter goes from Ahri to Lulu with the following 10 connections:
+
+```{r}
+set.seed(12345)
+visIgraph(induced_subgraph(LOLConected, get_diameter(LOLConected))) %>%
+  visIgraphLayout(layout = "layout_with_lgl") %>% 
+  visInteraction(dragNodes = F, zoomView = F)
+  
+```
+
+The **Mean Distance** is the average number of connections you have to traves to go from one node to another. For our Universe Network, this average is 4.43, that is really a good number for the size of the network.
+
+**Transitivity** measures the probability that two nodes adjacent to a common node are connected to each other. For our Universe Network, the transitivity is 39%, which is also a good number for the amount of champions.
+
+Finally, the **Assortativity by Degree** is a measure from -1 to 1 that tell us the preference of a node with few or many connections to be connected to nodes with the same characteristics (few with few and many with many). A positive number means a preference to connect to similar nodes and a negative number otherwise. For our Universe Network, this measure is 0.23, so we can tell there is not really a strong preference.
+
+##2.1. Largest cliques.
+
+A clique is a group of nodes that are all interconnected between then. Usually, in large cliques, individuals get stronger ties, that with other members of the network.
+
+The following are the 3 largest cliques in our Universe Network:
+
+```{r}
+# Geting the cliques
+LoLcliques <- lapply(largest_cliques(LOLConected), 
+                     function(i) induced_subgraph(LOLConected, i))
+```
+
+<div class = "row">
+<div class = "col-md-4">
+```{r}
+c1Data <- toVisNetworkData(LoLcliques[[1]])
+
+visNetwork(c1Data$nodes, c1Data$edges, height = "350px", width = "100%") %>% 
+  visIgraphLayout(layout = "layout_nicely") %>% 
+  visInteraction(dragNodes = F, zoomView = F)
+```
+</div>
+<div class = "col-md-4">
+```{r}
+c1Data <- toVisNetworkData(LoLcliques[[2]])
+
+visNetwork(c1Data$nodes, c1Data$edges, height = "350px", width = "100%") %>% 
+  visIgraphLayout(layout = "layout_nicely") %>% 
+  visInteraction(dragNodes = F, zoomView = F)
+```
+</div>
+<div class = "col-md-4">
+```{r}
+c1Data <- toVisNetworkData(LoLcliques[[3]])
+
+visNetwork(c1Data$nodes, c1Data$edges, height = "350px", width = "100%") %>% 
+  visIgraphLayout(layout = "layout_nicely") %>% 
+  visInteraction(dragNodes = F, zoomView = F)
+```
+</div>
+</div>
+
+We can see that there are strong connections between the lore of aspects from Mount Targon region. Also, from the ancient and recent history of Shurima. So any change in the lore of this champions
+will inevitably affect the clique to which they belong.
+
+# 2.2. Assortativity by Region.
+
+Just like we did with the asortability by degree, we can calculate the asortability by region, which will tell us is champions prefer or not to be connected to other champions from the same region.
+
+```{r}
+paste("Assortativity by Region:" , round(assortativity(LOLConected, as.numeric(factor(V(LOLConected)$region))),2))
+```
+
+This value is moderate so in some degree, champions are mostly connected to champions in the same region.
+
+Now let's see the edge density for each region, this is the ratio of the number of connections and the number of possible connections (is all Champions in a region was connected to each other). 
+
+```{r}
+aa <- sapply(regions, function(i) {
+  round(edge_density(induced_subgraph(LOLConected, V(LOLConected)$region == i)),2)
+  })
+knitr::kable(sort(aa),col.names = "Edge Density") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+In concordance with the results from the cliques, Mount Targon and Shirima are the regions with more percentage of connections between their Champions. This means that probably the narrative for these regions are around one common plot. In contrast, regions like Ionia and Demacia with a low edge density probably have multiple plots.
+
+#3 Important Champions in the Universe Network.
+There are multiple ways to calculate the important nodes in a network, we'll see some of the most common centrality methods, and for each of those we'll see the top three.
+
+If this was a social network, this important champions would be like the influencers. So if Riot wants to change the events of Runeterra these would be the first champions to consider.
+
+## 3.1. Degree.
+
+Degree es the most basic method and it is simple the count the conectios for each node. However, we must remember that many connections does not mean that it is well positioned in the network, it simply tells us who can reach in a single step more nodes.
+
+```{r}
+sort(degree(LOLConected),decreasing = T)[1:5] %>% knitr::kable(,col.names = "Degree") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+## 3.2. Betweenness
+
+Every node has a shortest path to reach another node, the Betweenness tells us the number of shortest paths that pass through a specific node. The results from the table are normalized.
+
+
+```{r}
+round(sort(betweenness(LOLConected,normalized = T),decreasing = T),2)[1:5] %>% knitr::kable(,col.names = "Betweenness") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+## 3.3. Closeness
+
+Closeness assigns a node a score (the higher the better) based on how close it is to the other nodes in the network. The results from the table are normalized.
+
+```{r}
+round(sort(closeness(LOLConected,normalized = T),decreasing = T),2)[1:5] %>% knitr::kable(,col.names = "Closeness") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+## 3.4. Eigen Centrality
+
+Eigen Centrality is a measurement that tells us how well connected is a node to other nodes that also have good connections.
+
+```{r}
+round(sort(eigen_centrality(LOLConected)$vector,decreasing = T),2)[1:5] %>% knitr::kable(,col.names = "Eigen Centrality") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+## 3.5. Page Rank
+
+Page rank is a measurement similar to Eigen Centrality, but it uses a different algorithm based on the one used by Google in the begins for their search engine.
+
+```{r}
+round(sort(page_rank(LOLConected)$vector,decreasing = T),2)[1:5] %>% knitr::kable(col.names = "Page Rank") %>% 
+  kableExtra::kable_styling(full_width = F)
+```
+
+
+## 3.6 Well Connected Champions of the Universe Network.
+
+Based on the result of the centrality methods, we can see that ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Swain.png "Swain"){ width=25 } and ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Nasus.png "Nasus"){ width=25 } are present in almost all the scores, making these two the best well-connected Champions (in terms of related lore) for the known universe of Runeterra.
+
+
+The following is the plot for the shortest paths from ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Swain.png "Swain"){ width=25 } to all other champions of the connected Network.
+
+```{r}
+ssp <- shortest_paths(LOLConected, "Swain")
+lc2 <- LOLConected %>% delete_edges(1:311)
+for (i in seq_along(ssp$vpath)) {
+  lc2 <- lc2 + path(ssp$vpath[[i]])
+}
+
+visIgraph(lc2) %>% 
+  visOptions(highlightNearest = T, nodesIdSelection = TRUE) %>% 
+  visInteraction(navigationButtons = TRUE)
+
+```
+
+
+Finally, this is the plot for the shortest paths from ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Nasus.png "Nasus"){ width=25 } to all other champions of the connected Network.
+
+```{r}
+nsp <- shortest_paths(LOLConected, "Nasus")
+lc3 <- LOLConected %>% delete_edges(1:311)
+for (i in seq_along(nsp$vpath)) {
+  lc3 <- lc3 + path(nsp$vpath[[i]])
+}
+
+visIgraph(lc3)%>% 
+  visOptions(highlightNearest = T, nodesIdSelection = TRUE) %>% 
+  visInteraction(navigationButtons = TRUE)
+
+```
+
+# 4. Final Notes.
+
+- This was this was a small glimpse of the LoL Universe Network, in which we could see interesting things like, that on average you need 5 connections to get from one champion to another, also the strong relationship between the champions of Mount Targon, additionally, we see, in terms of history, how well connected ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Swain.png "Swain"){ width=25 } is and ![](http://ddragon.leagueoflegends.com/cdn/8.21.1/img/champion/Nasus.png "Nasus"){ width=25 }. I know this study can be improved, for suggestions and corrections, you can contact me at [normalitychop@gmail.com](mailto:normalitychop@gmail.com).
+
+- This document was made using [<img src="https://www.r-project.org/Rlogo.png" width="75">](https://www.r-project.org/ "R"), [<img src="https://www.rstudio.com/wp-content/uploads/2016/09/RStudio-Logo-Blue-Gray-125.png" width="150">](https://www.rstudio.com/ "RStudio"), [<img src="https://www.rstudio.com/wp-content/uploads/2017/05/rmarkdown.png" width="75">](https://rmarkdown.rstudio.com/ "Rmarkdown"), [<img src="https://www.rstudio.com/wp-content/uploads/2014/04/knitr.png" width="75">](https://yihui.name/knitr/ "Knitr"), [<img src="https://plot.ly/static/img/logos/plotly-logomark.svg" width="150">](https://plot.ly/d3-js-for-r-and-shiny-charts/ "Plotly")and [visNetwork](https://datastorm-open.github.io/visNetwork/).
+
+- The repository of this study could be found at [github.com/CaVe80](https://github.com/CaVe80)
+
+- Thank you for taking the time to read this document.
